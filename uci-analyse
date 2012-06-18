@@ -1,0 +1,326 @@
+#!/usr/bin/expect -f
+# Parameters: <alg-move-list> <output-file> <
+set vers 1.01
+set file [lindex $argv 0]
+set outfile [lindex $argv 1]
+set enginepath "stockfish"
+set engineargs ""
+#set engineargs "/home/ojb/chess/houdini/bin/Houdini_15a_w32.exe"
+set engine "Houdini 1.5a"
+set fo [open $outfile w]
+set maxdepth [lindex $argv 2]
+set maxtime [lindex $argv 3]
+set threshold1 [lindex $argv 5]
+set threshold2 [lindex $argv 4]
+
+set fhandle [open $file r]
+
+spawn -noecho $enginepath
+
+expect "info"
+send "uci\n"
+expect "id"
+send "setoption name Hash value 512\n"
+send "setoption name UCI_AnalyseMode value true\n"
+send "setoption name GaviotaTbPath value /home/ojb/chess/egtb\n"
+send "setoption name Split_Depth value 18\n"
+send "isready\n"
+expect "readyok"
+set moves ""
+set the_move ""
+set last_move ""
+set wasBlunder 0
+proc sgn x {expr {($x>0) - ($x<0)}}
+proc getPVAndEval {mt sm p} {
+	set mate_in 0
+	set isBlack [expr "$p % 2"]
+	set scaling_factor [expr "1 - (2 * $isBlack)"]
+	set pv "NULL"
+	set score 0
+	set stop_sent 0
+	if {[string compare $sm ""] == 0} {
+		send "go depth $mt\n"
+	} else {
+		puts "searchmoves: '$sm'"
+		send "go depth $mt searchmoves $sm\n"
+	}
+	expect {
+		"score " {
+			expect -regexp {(cp|mate) ([-]?[0-9]+)} 
+			set cpOrMate $expect_out(1,string)
+			set n $expect_out(2,string)
+#			puts "!cpOrMate $n"
+			switch $cpOrMate {
+				"cp" { set score [expr "double($n)/100"] }
+				"mate" { 
+					set mat [expr "int($n)"]
+					set s [expr "int([sgn $mat])"]
+					set score [expr "($s * ( 100 - (abs($mat) / double(100))))"]
+					set mate_in $mat
+#					puts "!mate in $mat"
+				}
+			}
+#			puts [format "!pscore %f" $score]
+			exp_continue
+		}
+		"pv " {
+			expect -regexp {([a-h][1-8][a-h][1-8][rnbqRNBQ]?[ ]?)*}
+			set pv $expect_out(0,string)
+			set mvs [split $pv]
+			set bestmove mvs(0)
+#			puts "!ppv $pv"
+			exp_continue
+		}
+		"bestmove " {
+			expect -regexp {[a-h][1-8][a-h][1-8][RNBQrnbq]?}
+			set bestmove $expect_out(0,string)
+		} 
+	}
+	set abs_eval [expr "$score * $scaling_factor"]
+	puts "!(bm $bestmove score $score mate $mate_in pv $pv abs $abs_eval)"
+	return [list $bestmove $pv $score $mate_in $abs_eval]
+}
+set plyNum 0
+set headerNeeded 0
+proc getAdv {eval} {
+        set ae [expr "abs($eval)"]
+        set adv 0
+        if {$ae > 6} {
+                set adv 4
+        } elseif {$ae > 2.5} {
+                set adv 3
+        } elseif {$ae > 1} {
+                set adv 2
+        } elseif {$ae > 0.5} {
+                set adv 1
+        }
+	return $adv
+}
+proc getAbsEvalSymbol {eval} {
+	set adv [getAdv $eval]
+	set isBlack 0
+	if {$eval < 0} {set isBlack 1}
+        set abs_adv [expr "$eval * (1 - ($isBlack * 2))"]
+        puts "advantage is $adv, black is $isBlack, abs $abs_adv"
+        if {$adv == 0} { return "\$11" }
+        set NAG [expr "12 + ($adv * 2) + $isBlack"]
+        return "\$$NAG"
+
+}
+
+proc getEvalSymbol {eval ply} {
+	set isBlack [expr "$ply % 2"]
+	set adv [getAdv $eval]
+	set abs_adv [expr "$eval * (1 - ($isBlack * 2))"]
+	puts "advantage is $adv, black is $isBlack, abs $abs_adv"
+	if {$adv == 0} { return "\$11" }
+	set NAG [expr "12 + ($adv * 2) + $isBlack"]
+	return "\$$NAG"
+
+}
+proc formatScore {score mat} {
+	if {[expr "$score == 99.99"]} {
+		return "mate"
+	} elseif {$mat != 0} {
+		return "Mate$mat"
+	} else {
+		return [format "%.2f" $score]
+	}
+
+}
+proc outputMove {move plyNum headerNeeded} {
+global fo
+		if {[string compare "$move" ""]} {
+			puts "warning: empty move $move"
+			return
+		}
+		if {$headerNeeded || ($plyNum % 2) == 0} {
+			set headerNeeded 0
+			if {($plyNum % 2) == 1} {
+				set hdr "... "
+			} else {
+				set hdr ". "
+			}
+			puts $fo ""
+			puts -nonewline $fo [format "%d%s" [expr "($plyNum/2) + 1"] $hdr]
+		}
+		puts -nonewline $fo "$move "
+}
+set wasBlunder 0
+set lastEval "\$11"
+set the_eval "\$11"
+set last_move ""
+proc incrArrayElement {var key {incr 1}} {
+    upvar $var a
+    if {[info exists a($key)]} {
+        incr a($key) $incr
+    } else {
+        set a($key) $incr
+    }
+ }
+set blunders(0) 0
+set blunders(1) 0
+set mistakes(0) 0
+set mistakes(1) 0
+set totalerr(0) 0
+set totalerr(1) 0
+set inacc(0) 0
+set inacc(1) 0
+set agreement(0) 0
+set agreement(1) 0
+set nummoves(0) 0
+set nummoves(1) 0
+
+while {[gets $fhandle the_move] >= 0} {
+	set annot ""
+	set var ""
+	set varscore 0
+	set comm ""
+	set score 0
+	set score2 0
+	if {[string compare "$the_move" ""] != 0 } {
+		set moves "$moves$last_move "
+		set side [expr "$plyNum % 2"]
+		incr nummoves($side)
+		puts "*** $last_move"
+		puts "!searching position after $moves (ply $plyNum)"
+		puts "!actual move played was -$the_move-"
+		if {[string compare $moves " "]} { send "position startpos moves$moves\n" } else { 
+			send "ucinewgame\n"
+			puts "engine ready"
+			send "isready\n"
+			expect "readyok"
+		}
+		set results [getPVAndEval $maxdepth "" $plyNum]
+		set bestmove [lindex $results 0]
+		set pv [lindex $results 1]
+		set score [lindex $results 2]
+		set abs_score [lindex $results 4]
+		set mat [lindex $results 3]
+		set varscore [formatScore $score $mat]
+		set score2 $score
+#		set comm $score
+		if {[string compare -nocase "$the_move" "$bestmove"] == 0} {
+			puts "!! $bestmove was best move"
+			incr agreement($side)
+			if {$wasBlunder} {
+				set annot "!"
+				set wasBlunder 0
+			}
+			set abs_score2 $abs_score
+			set delta 0
+		} else {
+			puts "! $the_move was not best move, which was $score $bestmove"
+#			if {$mat == 1} {
+#				puts "! mated"
+#				set pv2 $pv
+#				set score2 100
+#				set mat2 0
+#			} else {
+#			send "position startpos moves $moves\n"
+			set results [getPVAndEval $maxdepth $the_move $plyNum]
+			set pv2 [lindex $results 1]
+			set score2 [lindex $results 2]
+			set mat2 [lindex $results 3]
+			set abs_score2 [lindex $results 4]
+#			}
+			set delta [expr "-($score2 - $score)"]
+			puts "!! inaccuracy (delta=$delta)"
+			if {$delta >= $threshold2} {
+				puts "!! ?? delta $delta"
+				if {$mat2 != 0} {
+					set comm [format "This allows a mate in %d" [expr "abs($mat2)"]]
+					puts "mate=$mat2, $comm"
+				} elseif {$mat != 0} {
+					set comm [format "Mate in %d missed" [expr "abs($mat)"]]
+					puts "mate=$mat, $comm"
+				} else {
+					set comm "$engine thinks this is a blunder"
+				}
+				puts $comm
+				set annot "??"
+				set var "$pv"
+				set wasBlunder 1
+				incr blunders($side)
+			} elseif {$delta >= $threshold1} {
+				puts "!! ? delta $delta"
+				set comm "$engine thinks this is a mistake"
+				set annot "?"
+				set var "$pv"
+				set wasBlunder 1
+				incr mistakes($side)
+			} else {
+				set wasBlunder 0
+			}			
+			if {$delta >= 0.4} {
+				incr inacc($side)
+			}
+			set totalerr($side) [expr $totalerr($side) " + $delta"]
+			puts [format "!pv2 %s" $pv2]
+			puts [format "!score2 %f" $score2]
+		}
+	puts "!!outputting move $the_move"
+	outputMove "$the_move$annot" $plyNum $headerNeeded
+	set the_eval [getAbsEvalSymbol $abs_score2]
+	puts "current evaluation is $abs_score2 ($the_eval)"
+	if {[string compare $the_eval $lastEval] && ($wasBlunder || [string compare $the_eval "\$11"])} {
+		puts -nonewline $fo " $the_eval "
+	}
+	set lastEval $the_eval
+	if {[string compare $comm ""]} {
+		puts -nonewline $fo "\{ $comm \} "
+	}
+	if {[string compare $var ""]} {
+		set headerNeeded 1
+		puts -nonewline $fo "( "
+		if {$wasBlunder} {
+			puts -nonewline $fo "{ Better was: } "
+		}
+		set pn2 $plyNum
+		foreach m [split $pv] {
+			outputMove $m $pn2 $headerNeeded
+			set headerNeeded 0	
+			incr pn2		
+		}
+		incr pn2 -1
+		puts $fo " [getEvalSymbol $score $plyNum] )"	
+	}
+	incr plyNum
+	set last_move $the_move
+	}
+}
+                set moves "$moves$last_move "
+                set side [expr "$plyNum % 2"]
+                incr nummoves($side)
+                puts "*** $last_move"
+                puts "!searching final position after $moves (ply $plyNum)"
+                puts "!actual move played was $last_move"
+		send "position startpos moves$moves\n"
+                set results [getPVAndEval $maxdepth "" $plyNum]
+                set bestmove [lindex $results 0]
+                set pv [lindex $results 1]
+if {[string compare $pv "NULL"]} {
+puts $fo "\n( { The game could have continued: } "
+outputMove $last_move [expr "$plyNum - 1"] 1
+ set pn2 $plyNum
+ foreach m [split $pv] {
+                        outputMove $m $pn2 0
+                        incr pn2
+                }
+puts $fo " )"
+}
+puts "**** final pv is $pv ****"
+set wbp [expr "$blunders(0) / ($nummoves(0) * 1.0) * 100"]
+set wmp [expr "$mistakes(0) / ($nummoves(0) * 1.0) * 100"]
+set wap [expr "$agreement(0) / ($nummoves(0) * 1.0) * 100"]
+set wacc [expr "(1.0 - ($inacc(0) / ($nummoves(0) * 1.0))) * 100"]
+set wae [expr "$totalerr(0) / ($nummoves(0) * 1.0)"]
+set bbp [expr "$blunders(1) / ($nummoves(1) * 1.0) * 100"]
+set bmp [expr "$mistakes(1) / ($nummoves(1) * 1.0) * 100"]
+set bap [expr "$agreement(1) / ($nummoves(1) * 1.0) * 100"]
+set bacc [expr "(1.0 - ($inacc(1) / ($nummoves(1) * 1.0))) * 100"]
+set bae [expr "$totalerr(1) / ($nummoves(1) * 1.0)"]
+
+puts $fo [format "{ White accuracy: %.1f%% (mean error=%.3f), blunders: %d (%.1f%%), mistakes: %d (%.1f%%), agreement: %.1f%%. " $wacc $wae $blunders(0) $wbp $mistakes(0) $wmp $wap]
+puts $fo [format "Black accuracy: %.1f%% (mean error=%.3f), blunders: %d (%.1f%%), mistakes: %d (%.1f%%), agreement: %.1f%%. }" $bacc $bae $blunders(1) $bbp $mistakes(1) $bmp $bap]
+close $fhandle

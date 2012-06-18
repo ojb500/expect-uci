@@ -1,0 +1,46 @@
+#!/bin/bash
+DEPTH=10
+VERBOSE=0
+while getopts "d:v" opt; do
+	case $opt in
+		d) DEPTH=$OPTARG;;
+		v) VERBOSE=1;;
+	esac
+done
+eval NAME=\$$#
+echo "Analysing $NAME at depth $DEPTH."
+test $VERBOSE -gt 0 && echo "In verbose mode."
+RESULT=$(grep -Eo '(1-0|0-1|1/2-1/2|\*)$' $NAME)
+rm "$NAME.*"
+ALG="$NAME.alg"
+ANA="$NAME.ana"
+OUT="$NAME.out"
+TEMP="$NAME.temp"
+TEMP2="$NAME.temp2"
+TAGS="$NAME.tags"
+TIME="$NAME.time"
+LOG="$NAME.log"
+
+pgn-extract $NAME > $TEMP
+grep '^\[' $TEMP | grep -ve '^\[Annotator' > $TAGS
+#
+# echo '[Annotator "Houdini v1.5a @ chesspo.st"]' >> $TAGS 
+#
+echo >> $TAGS
+
+# Extract move list in algebraic notation
+pgn-extract $NAME -C -N -V -Wlalg --nomovenumbers --notags | grep -oE '[a-h][1-8][a-h][1-8][RNBQ]?' | tr A-Z a-z > $ALG
+
+echo "Analysing $(cat $ALG | wc -l) moves ($RESULT)"
+/usr/bin/time -f "%E" -o $TIME nice ./uci-analyse $ALG $OUT $DEPTH 2500 2 0.9 2>&1 | tee $LOG
+cat $TIME
+cat $TAGS $OUT > $TEMP
+echo -n "{Analysis completed in " >> $TEMP
+cat $TIME >> $TEMP
+echo -n "}" >> $TEMP
+
+echo "$RESULT" >> $TEMP
+cat $TEMP | sed 's/\(\([a-h][1-8][a-h][1-8]\)\([rnbq]\)\)/\2\U\3/g' > $TEMP2
+pgn-extract $TEMP2 > $ANA
+#rm $ALG $TAGS # $TEMP $TEMP2
+mv $ANA $OUT
