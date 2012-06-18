@@ -28,7 +28,7 @@ grep '^\[' $TEMP | grep -ve '^\[Annotator' > $TAGS
 #
 echo >> $TAGS
 
-# Extract move list in algebraic notation
+# Extract move list in algebraic notation, then turn promotions like 'a2a1Q' to 'a2a1q' :(
 pgn-extract $NAME -C -N -V -Wlalg --nomovenumbers --notags | grep -oE '[a-h][1-8][a-h][1-8][RNBQ]?' | tr A-Z a-z > $ALG
 
 echo "Analysing $(cat $ALG | wc -l) moves ($RESULT)"

@@ -22,7 +22,7 @@ send "uci\n"
 expect "id"
 send "setoption name Hash value 512\n"
 send "setoption name UCI_AnalyseMode value true\n"
-send "setoption name GaviotaTbPath value /home/ojb/chess/egtb\n"
+send "setoption name GaviotaTbPath value ../egtb\n"
 send "setoption name Split_Depth value 18\n"
 send "isready\n"
 expect "readyok"
@@ -66,7 +66,7 @@ proc getPVAndEval {mt sm p} {
 		"pv " {
 			expect -regexp {([a-h][1-8][a-h][1-8][rnbqRNBQ]?[ ]?)*}
 			set pv $expect_out(0,string)
-			set mvs [split $pv]
+			set mvs [split $pv " "]
 			set bestmove mvs(0)
 #			puts "!ppv $pv"
 			exp_continue
@@ -130,7 +130,7 @@ proc formatScore {score mat} {
 }
 proc outputMove {move plyNum headerNeeded} {
 global fo
-		if {[string compare "$move" ""]} {
+		if {[string compare "$move" ""] == 0} {
 			puts "warning: empty move $move"
 			return
 		}
@@ -277,7 +277,7 @@ while {[gets $fhandle the_move] >= 0} {
 			puts -nonewline $fo "{ Better was: } "
 		}
 		set pn2 $plyNum
-		foreach m [split $pv] {
+		foreach m [split $pv " "] {
 			outputMove $m $pn2 $headerNeeded
 			set headerNeeded 0	
 			incr pn2		
@@ -303,7 +303,7 @@ if {[string compare $pv "NULL"]} {
 puts $fo "\n( { The game could have continued: } "
 outputMove $last_move [expr "$plyNum - 1"] 1
  set pn2 $plyNum
- foreach m [split $pv] {
+ foreach m [split $pv " "] {
                         outputMove $m $pn2 0
                         incr pn2
                 }
