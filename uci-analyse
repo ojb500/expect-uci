@@ -1,5 +1,7 @@
 #!/usr/bin/expect -f
-# Parameters: <alg-move-list> <output-file> <
+# Parameters: <algebraic-move-list-file> <output-file> <maxdepth> <maxtime> <??-threshold> <?-threshold>
+# Maxtime isn't implemented atm
+
 set vers 1.01
 set file [lindex $argv 0]
 set outfile [lindex $argv 1]
@@ -96,6 +98,7 @@ proc getAdv {eval} {
         }
 	return $adv
 }
+
 proc getAbsEvalSymbol {eval} {
 	set adv [getAdv $eval]
 	set isBlack 0
@@ -105,7 +108,6 @@ proc getAbsEvalSymbol {eval} {
         if {$adv == 0} { return "\$11" }
         set NAG [expr "12 + ($adv * 2) + $isBlack"]
         return "\$$NAG"
-
 }
 
 proc getEvalSymbol {eval ply} {
